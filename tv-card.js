@@ -1,6 +1,6 @@
 /*! TV Card — compact glass card for a TV in Home Assistant · MIT · github.com/stathisktm/tv-card */
 
-const TV_VERSION = "1.0.0";
+const TV_VERSION = "1.1.0";
 
 const TV_DEFAULTS = {
   title: "",
@@ -11,6 +11,8 @@ const TV_DEFAULTS = {
   hide_sources: ["Live Tv", "Notify", "Pipup", "Android TV Launcher"],
   show_apps: true,
   show_channels: true,
+  logo_colors: true,     // tint the card from the channel logo
+  volume_step: 1,        // % per remote volume key press (TCL: 1)
   color_on: "linear-gradient(135deg, #1e3a8a, #7c3aed)",
   color_off: "linear-gradient(135deg, #1f2937, #374151)",
 };
@@ -28,6 +30,43 @@ const tvEsc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;",
 /** "ΣΚΑΪ HD" / "Σκάι" / "skai" → "ΣΚΑΙ" … for matching a source with its EPG entry. */
 const tvNorm = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase()
   .replace(/\bHD\b|\bTV\b/g, "").replace(/[^A-Z0-9Α-Ω]/g, "");
+/** The most vivid colour of a logo (white, black, greys and transparent pixels ignored), or null. */
+const tvColorCache = new Map();
+function tvLogoColor(url) {
+  if (tvColorCache.has(url)) return tvColorCache.get(url);
+  const job = new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const n = 48, cv = document.createElement("canvas");
+        cv.width = cv.height = n;
+        const g = cv.getContext("2d", { willReadFrequently: true });
+        g.drawImage(img, 0, 0, n, n);
+        const px = g.getImageData(0, 0, n, n).data;
+        const bins = new Map();
+        for (let i = 0; i < px.length; i += 4) {
+          const r = px[i], gg = px[i + 1], b = px[i + 2], a = px[i + 3];
+          if (a < 128) continue;
+          const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b);
+          if (mx < 40 || mx - mn < 40) continue; // black, white and greys
+          const k = `${r >> 5},${gg >> 5},${b >> 5}`;
+          const e = bins.get(k) || { c: 0, r: 0, g: 0, b: 0 };
+          e.c++; e.r += r; e.g += gg; e.b += b;
+          bins.set(k, e);
+        }
+        let best = null;
+        for (const e of bins.values()) if (!best || e.c > best.c) best = e;
+        resolve(best && best.c > 6 ? [best.r / best.c, best.g / best.c, best.b / best.c].map(Math.round) : null);
+      } catch (e) { resolve(null); }
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+  tvColorCache.set(url, job);
+  return job;
+}
+
 const tvTime = (d) => d.toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", hour12: false });
 
 class TvCard extends HTMLElement {
@@ -77,6 +116,7 @@ class TvCard extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>
         :host { display:block; }
+        [hidden] { display:none !important; }
         ha-card { display:block; background:rgba(0,0,0,.28) !important; border:1px solid rgba(255,255,255,.035) !important;
           box-shadow:inset 0 1px 0 rgba(255,255,255,.025), 0 2px 8px rgba(0,0,0,.12) !important; padding:8px 9px 9px; color:#fff !important; overflow:hidden; }
         .head { display:flex; align-items:center; gap:7px; height:30px; margin-bottom:6px; }
@@ -92,7 +132,7 @@ class TvCard extends HTMLElement {
 
         .now { position:relative; overflow:hidden; border-radius:12px; padding:8px; display:flex; gap:10px; align-items:center;
           background:var(--tv-off); min-height:64px; box-sizing:border-box; margin-bottom:6px; }
-        .now::after { content:""; position:absolute; inset:0; background:var(--tv-on); opacity:0; transition:opacity .35s; }
+        .now::after { content:""; position:absolute; inset:0; background:var(--tv-tint, var(--tv-on)); opacity:0; transition:opacity .35s; }
         .now.on::after { opacity:1; }
         .now > * { position:relative; z-index:1; }
         .logo { flex:none; width:56px; height:56px; border-radius:11px; background:#fff center/78% no-repeat; box-shadow:0 3px 10px rgba(0,0,0,.3); display:grid; place-items:center; color:#111; }
@@ -118,7 +158,10 @@ class TvCard extends HTMLElement {
         input[type=range]::-moz-range-track { height:4px; border-radius:4px; background:rgba(255,255,255,.14); }
         input[type=range]::-moz-range-thumb { width:10px; height:10px; border-radius:50%; border:2px solid rgba(8,8,14,.8); background:#a5b4fc; }
 
-        .row { display:flex; gap:5px; overflow-x:auto; scrollbar-width:none; margin-bottom:6px; padding-bottom:1px; }
+        .row { display:flex; gap:5px; overflow-x:auto; scrollbar-width:none; margin-bottom:6px; padding-bottom:1px;
+          touch-action:pan-y; overscroll-behavior-x:contain; cursor:grab; user-select:none; -webkit-user-select:none;
+          -webkit-mask-image:linear-gradient(90deg, #000 92%, transparent); mask-image:linear-gradient(90deg, #000 92%, transparent); }
+        .row.drag { cursor:grabbing; }
         .row::-webkit-scrollbar { display:none; }
         .row:empty { display:none; }
         .chn { flex:none; width:62px; border:0; padding:0; background:none; color:#fff; cursor:pointer; font:inherit; text-align:center; }
@@ -130,7 +173,8 @@ class TvCard extends HTMLElement {
         .pill { flex:none; height:25px; padding:0 9px; border-radius:8px; border:1px solid rgba(255,255,255,.11); background:rgba(8,8,14,.42);
           color:#fff; font:inherit; font-size:9px; font-weight:600; display:flex; align-items:center; gap:4px; cursor:pointer; white-space:nowrap; }
         .pill ha-icon { --mdc-icon-size:14px; }
-        .pill.on { background:var(--tv-on); border-color:transparent; }
+        .pill.on { background:var(--tv-tint, var(--tv-on)); border-color:transparent; }
+        .ctrl .play { background:rgba(255,255,255,.16); }
 
         .pad { display:grid; grid-template-columns:repeat(3, 44px); grid-template-rows:repeat(3, 38px); gap:5px; justify-content:center; margin:2px 0 4px; }
         .pad[hidden], .padx[hidden] { display:none; }
@@ -166,8 +210,9 @@ class TvCard extends HTMLElement {
           </div>
 
           <div class="ctrl">
-            <button class="btn" data-k="ch_down" title="Προηγούμενο κανάλι"><ha-icon icon="mdi:chevron-down"></ha-icon></button>
-            <button class="btn" data-k="ch_up" title="Επόμενο κανάλι"><ha-icon icon="mdi:chevron-up"></ha-icon></button>
+            <button class="btn" data-m="media_previous_track" title="Προηγούμενο (κανάλι ή κομμάτι)"><ha-icon icon="mdi:skip-previous"></ha-icon></button>
+            <button class="btn play" data-m="media_play_pause" title="Αναπαραγωγή / παύση"><ha-icon icon="mdi:play-pause"></ha-icon></button>
+            <button class="btn" data-m="media_next_track" title="Επόμενο (κανάλι ή κομμάτι)"><ha-icon icon="mdi:skip-next"></ha-icon></button>
             <div class="vol">
               <button class="btn mute" title="Σίγαση"><ha-icon icon="mdi:volume-high"></ha-icon></button>
               <input type="range" min="0" max="100" step="1">
@@ -214,13 +259,11 @@ class TvCard extends HTMLElement {
     });
     const vol = $(".ctrl input");
     vol.addEventListener("input", () => { this._dragVol = Date.now(); $(".volv").textContent = `${vol.value}%`; });
-    vol.addEventListener("change", () => { this._call("media_player", "volume_set", { entity_id: tv(), volume_level: vol.value / 100 }); this._haptic(); });
-    for (const b of this.shadowRoot.querySelectorAll("[data-k]")) {
-      b.addEventListener("click", () => {
-        const up = b.dataset.k === "ch_up";
-        if (this._config.remote) this._remote(up ? "CHANNEL_UP" : "CHANNEL_DOWN");
-        else this._call("media_player", up ? "media_next_track" : "media_previous_track", { entity_id: tv() });
-      });
+    vol.addEventListener("change", () => { this._setVolume(vol.value / 100); this._haptic(); });
+    for (const row of this.shadowRoot.querySelectorAll(".row")) this._dragScroll(row);
+    // The TV's own media_player decides what next/previous mean (channel on Live TV, track in apps).
+    for (const b of this.shadowRoot.querySelectorAll("[data-m]")) {
+      b.addEventListener("click", () => { this._call("media_player", b.dataset.m, { entity_id: tv() }); this._haptic(); });
     }
     $(".dpad").addEventListener("click", () => {
       this._dpad = !this._dpad;
@@ -229,10 +272,12 @@ class TvCard extends HTMLElement {
     });
     for (const b of this.shadowRoot.querySelectorAll("[data-r]")) b.addEventListener("click", () => this._remote(b.dataset.r));
     $(".chans").addEventListener("click", (ev) => {
+      if (this._dragged) return;
       const s = ev.target.closest("[data-src]")?.dataset.src;
       if (s) { this._call("media_player", "select_source", { entity_id: tv(), source: s }); this._haptic(); }
     });
     $(".apps").addEventListener("click", (ev) => {
+      if (this._dragged) return;
       const s = ev.target.closest("[data-src]")?.dataset.src;
       if (s) { this._call("media_player", "select_source", { entity_id: tv(), source: s }); this._haptic(); }
     });
@@ -250,6 +295,41 @@ class TvCard extends HTMLElement {
     this._call("remote", "send_command", { entity_id: this._config.remote, command: cmd });
     this._haptic();
   }
+  /** Many TV players can only step the volume (Android TV Remote). With a remote set, the slider
+   *  becomes the right number of volume key presses; otherwise it's a plain volume_set. */
+  _setVolume(level) {
+    const a = this._st?.attributes || {}, c = this._config;
+    const cur = typeof a.volume_level === "number" ? a.volume_level : null;
+    if (c.remote && cur !== null) {
+      const steps = Math.round(((level - cur) * 100) / (Number(c.volume_step) || 1));
+      if (!steps) return;
+      this._call("remote", "send_command", {
+        entity_id: c.remote, command: steps > 0 ? "VOLUME_UP" : "VOLUME_DOWN",
+        num_repeats: Math.min(Math.abs(steps), 50), delay_secs: 0.05,
+      });
+    } else this._call("media_player", "volume_set", { entity_id: c.entity, volume_level: level });
+  }
+
+  /** Horizontal swipe / drag for the channel and app rows, done here so the dashboard can't take it. */
+  _dragScroll(row) {
+    let x0 = 0, s0 = 0, id = null, moved = false;
+    row.addEventListener("pointerdown", (e) => { id = e.pointerId; x0 = e.clientX; s0 = row.scrollLeft; moved = false; });
+    row.addEventListener("pointermove", (e) => {
+      if (e.pointerId !== id) return;
+      const dx = e.clientX - x0;
+      if (!moved && Math.abs(dx) > 6) { moved = true; row.classList.add("drag"); try { row.setPointerCapture(id); } catch (_) {} }
+      if (moved) { row.scrollLeft = s0 - dx; e.preventDefault(); }
+    });
+    const end = (e) => {
+      if (e.pointerId !== id) return;
+      id = null;
+      row.classList.remove("drag");
+      if (moved) { this._dragged = true; setTimeout(() => { this._dragged = false; }, 60); }
+    };
+    row.addEventListener("pointerup", end);
+    row.addEventListener("pointercancel", end);
+  }
+
   _haptic() { this.dispatchEvent(new CustomEvent("haptic", { detail: "light", bubbles: true, composed: true })); }
   _moreInfo(entityId) { this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId }, bubbles: true, composed: true })); }
 
@@ -302,6 +382,17 @@ class TvCard extends HTMLElement {
     this._cur = on ? cur : null;
 
     const logoUrl = on ? this._url(a.entity_picture || cur?.logo) : "";
+    if (this._keys.tint !== logoUrl) {
+      this._keys.tint = logoUrl;
+      const card = $("ha-card");
+      if (!c.logo_colors || !logoUrl) card.style.removeProperty("--tv-tint");
+      else tvLogoColor(logoUrl).then((rgb) => {
+        if (this._keys.tint !== logoUrl) return;
+        if (!rgb) { card.style.removeProperty("--tv-tint"); return; }
+        const [r, g, b] = rgb, d = (v) => Math.round(v * 0.45);
+        card.style.setProperty("--tv-tint", `linear-gradient(135deg, rgb(${r},${g},${b}), rgb(${d(r)},${d(g)},${d(b)}))`);
+      });
+    }
     const logo = $(".logo");
     if (this._keys.logo !== logoUrl) {
       this._keys.logo = logoUrl;
@@ -322,7 +413,10 @@ class TvCard extends HTMLElement {
       $(".volv").textContent = `${Math.round(v * 100)}%`;
     } else if (v == null) $(".volv").textContent = "--";
     $(".dpad").hidden = !c.remote;
-    $("[data-k=ch_down]").hidden = $("[data-k=ch_up]").hidden = !c.remote && !(st.attributes.supported_features & 32);
+    const f = a.supported_features || 0;
+    $("[data-m=media_previous_track]").hidden = !(f & 16);
+    $("[data-m=media_next_track]").hidden = !(f & 32);
+    $("[data-m=media_play_pause]").hidden = !(f & 1) && !(f & 16384);
 
     // Channels (sources with a TV logo / EPG entry) and apps (the rest).
     const hide = new Set((c.hide_sources || []).map((s) => s.toLowerCase()));
@@ -387,6 +481,8 @@ const TV_LABELS = {
   hide_sources: "Πηγές που δεν εμφανίζονται",
   show_channels: "Κανάλια",
   show_apps: "Εφαρμογές",
+  logo_colors: "Χρώμα από τον λογότυπο",
+  volume_step: "Βήμα έντασης ανά πάτημα (%)",
   color_on: "Χρώμα: ανοιχτή",
   color_off: "Χρώμα: κλειστή",
 };
@@ -397,7 +493,8 @@ const TV_SCHEMA = [
   { name: "remote", selector: { entity: { filter: { domain: "remote" } } } },
   { name: "epg_entity", selector: { entity: { filter: { domain: "sensor" } } } },
   { name: "picture_mode_entity", selector: { entity: { filter: { domain: ["select", "input_select"] } } } },
-  { type: "grid", name: "", schema: [{ name: "show_channels", selector: { boolean: {} } }, { name: "show_apps", selector: { boolean: {} } }] },
+  { type: "grid", name: "", schema: [{ name: "show_channels", selector: { boolean: {} } }, { name: "show_apps", selector: { boolean: {} } }, { name: "logo_colors", selector: { boolean: {} } }] },
+  { name: "volume_step", selector: { number: { min: 1, max: 10, mode: "box" } } },
   { name: "hide_sources", selector: { text: { multiple: true } } },
   {
     type: "expandable", title: "Χρώματα (χρώμα ή CSS gradient)", icon: "mdi:palette",

@@ -5,7 +5,8 @@ A compact dark-glass Lovelace card for a TV in Home Assistant, with Greek labels
 - **Now and next:** the current programme with its times and a progress bar, plus what's on after it. This comes from an EPG sensor.
 - **Channels:** each channel's logo, with what's on it right now. Tap one to switch to it (`media_player.select_source`).
 - **Apps:** Netflix, YouTube, Stremio, Spotify and the rest of the source list.
-- **Volume, mute and channel ±.**
+- **Volume, mute, previous / play-pause / next.** Through the TV's own media player, so next and previous change the channel on Live TV and the track in apps. With a `remote` set, the volume slider sends the matching number of volume key presses, because Android TV Remote can only step the volume.
+- **Colours from the logo.** The card is tinted from the current channel's logo (`logo_colors`).
 - **Remote:** d-pad, OK, Back, Home, Menu and Info, through a `remote` entity (Android TV Remote).
 - **Picture mode:** chips for a `select` entity.
 
@@ -25,6 +26,8 @@ title: TCL 75                                # optional; defaults to the device 
 hide_sources: [Live Tv, Notify, Pipup, Android TV Launcher]
 show_channels: true
 show_apps: true
+logo_colors: true
+volume_step: 1                               # % per volume key press
 color_on: "linear-gradient(135deg, #1e3a8a, #7c3aed)"
 color_off: "linear-gradient(135deg, #1f2937, #374151)"
 ```
