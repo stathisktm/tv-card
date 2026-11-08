@@ -1,6 +1,6 @@
 /*! TV Card — compact glass card for a TV in Home Assistant · MIT · github.com/stathisktm/tv-card */
 
-const TV_VERSION = "1.1.0";
+const TV_VERSION = "1.1.1";
 
 const TV_DEFAULTS = {
   title: "",
@@ -251,7 +251,12 @@ class TvCard extends HTMLElement {
   _bind() {
     const $ = (s) => this.shadowRoot.querySelector(s);
     const tv = () => this._config.entity;
-    $(".power").addEventListener("click", () => { this._call("media_player", "toggle", { entity_id: tv() }); this._haptic(); });
+    // turn_on / turn_off rather than toggle: some template media players ignore toggle.
+    $(".power").addEventListener("click", () => {
+      const off = ["off", "standby", "unavailable", "unknown"].includes(this._st?.state);
+      this._call("media_player", off ? "turn_on" : "turn_off", { entity_id: tv() });
+      this._haptic();
+    });
     $(".name").addEventListener("click", () => this._moreInfo(tv()));
     $(".mute").addEventListener("click", () => {
       const a = this._st?.attributes || {};
