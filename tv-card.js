@@ -1,6 +1,6 @@
 /*! TV Card — compact glass card for a TV in Home Assistant · MIT · github.com/stathisktm/tv-card */
 
-const TV_VERSION = "1.1.1";
+const TV_VERSION = "1.1.2";
 
 const TV_DEFAULTS = {
   title: "",
@@ -266,9 +266,19 @@ class TvCard extends HTMLElement {
     vol.addEventListener("input", () => { this._dragVol = Date.now(); $(".volv").textContent = `${vol.value}%`; });
     vol.addEventListener("change", () => { this._setVolume(vol.value / 100); this._haptic(); });
     for (const row of this.shadowRoot.querySelectorAll(".row")) this._dragScroll(row);
-    // The TV's own media_player decides what next/previous mean (channel on Live TV, track in apps).
+    // On Live TV next/previous pick the neighbouring channel from the card's own channel list
+    // (the same select_source a logo tap uses); in apps they go to the TV as next/previous track.
     for (const b of this.shadowRoot.querySelectorAll("[data-m]")) {
-      b.addEventListener("click", () => { this._call("media_player", b.dataset.m, { entity_id: tv() }); this._haptic(); });
+      b.addEventListener("click", () => {
+        const m = b.dataset.m, list = this._chanList || [];
+        const live = m !== "media_play_pause" && list.length && (list.includes(this._source) || this._liveTv);
+        if (live) {
+          const i = list.indexOf(this._source), step = m === "media_next_track" ? 1 : -1;
+          const next = list[i < 0 ? 0 : (i + step + list.length) % list.length];
+          this._call("media_player", "select_source", { entity_id: tv(), source: next });
+        } else this._call("media_player", m, { entity_id: tv() });
+        this._haptic();
+      });
     }
     $(".dpad").addEventListener("click", () => {
       this._dpad = !this._dpad;
@@ -431,6 +441,9 @@ class TvCard extends HTMLElement {
       const e = this._findEpg(epg, s);
       if (e || /\bHD\b/i.test(s)) chans.push({ s, e }); else apps.push(s);
     }
+    this._chanList = chans.map((x) => x.s);
+    this._source = source;
+    this._liveTv = on && (/^live\s*tv$/i.test(a.app_name || "") || a.app_id === "com.tcl.tv" || a.media_content_type === "channel");
     const ckey = JSON.stringify([chans.map((x) => [x.s, x.e?.title, x.e?.logo]), source, on, c.show_channels]);
     if (this._keys.chans !== ckey) {
       this._keys.chans = ckey;
